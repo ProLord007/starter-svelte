@@ -1,0 +1,15 @@
+{
+	"background_color": "#424043",
+	"theme_color": "#9f76ff",
+	"name": "Sandrina Pereira - UX Engineer",
+	"short_name": "sandrina-p",
+	"display": "minimal-ui",
+	"start_url": "/",
+	"icons": [
+		{
+			"src": "favicon192.png",
+			"sizes": "192x192",
+			"type": "image/png"
+		}
+	]
+}

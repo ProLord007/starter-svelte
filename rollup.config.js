@@ -1,76 +1,151 @@
-import svelte from 'rollup-plugin-svelte';
-import commonjs from '@rollup/plugin-commonjs';
+import path from 'path';
+
 import resolve from '@rollup/plugin-node-resolve';
-import livereload from 'rollup-plugin-livereload';
+import replace from '@rollup/plugin-replace';
+import commonjs from '@rollup/plugin-commonjs';
+import url from '@rollup/plugin-url';
+
+import svelte from 'rollup-plugin-svelte';
+import babel from '@rollup/plugin-babel';
 import { terser } from 'rollup-plugin-terser';
-import css from 'rollup-plugin-css-only';
+import sveltePreprocess from 'svelte-preprocess';
+import config from 'sapper/config/rollup.js';
+import pkg from './package.json';
 
-const production = !process.env.ROLLUP_WATCH;
+const mode = process.env.NODE_ENV;
+const dev = mode === 'development';
+const legacy = !!process.env.SAPPER_LEGACY_BUILD;
 
-function serve() {
-	let server;
+const onwarn = (warning, onwarn) =>
+  (warning.code === 'MISSING_EXPORT' && /'preload'/.test(warning.message)) ||
+  (warning.code === 'CIRCULAR_DEPENDENCY' && /[/\\]@sapper[/\\]/.test(warning.message)) ||
+  onwarn(warning);
 
-	function toExit() {
-		if (server) server.kill(0);
-	}
+const preprocess = sveltePreprocess({
+  postcss: true,
+  preserve: ['ld+json'], // for schema on <head>
+});
 
-	return {
-		writeBundle() {
-			if (server) return;
-			server = require('child_process').spawn('npm', ['run', 'start', '--', '--dev'], {
-				stdio: ['ignore', 'inherit', 'inherit'],
-				shell: true
-			});
-
-			process.on('SIGTERM', toExit);
-			process.on('exit', toExit);
-		}
-	};
-}
+// const ga_id = { __GA_ID__: dev ? false : 'UA-70069700-4' };
 
 export default {
-	input: 'src/main.js',
-	output: {
-		sourcemap: true,
-		format: 'iife',
-		name: 'app',
-		file: 'public/build/bundle.js'
-	},
-	plugins: [
-		svelte({
-			compilerOptions: {
-				// enable run-time checks when not in production
-				dev: !production
-			}
-		}),
-		// we'll extract any component CSS out into
-		// a separate file - better for performance
-		css({ output: 'bundle.css' }),
+  client: {
+    input: config.client.input(),
+    output: config.client.output(),
+    plugins: [
+      replace({
+        preventAssignment: true,
+        // ...ga_id,
+        'process.browser': true,
+        'process.env.NODE_ENV': JSON.stringify(mode),
+      }),
+      svelte({
+        compilerOptions: {
+          dev,
+          hydratable: true,
+        },
+        preprocess,
+      }),
+      url({
+        sourceDir: path.resolve(__dirname, 'src/node_modules/images'),
+        publicPath: '/client/',
+      }),
+      resolve({
+        browser: true,
+        dedupe: ['svelte'],
+      }),
+      commonjs(),
 
-		// If you have external dependencies installed from
-		// npm, you'll most likely need these plugins. In
-		// some cases you'll need additional configuration -
-		// consult the documentation for details:
-		// https://github.com/rollup/plugins/tree/master/packages/commonjs
-		resolve({
-			browser: true,
-			dedupe: ['svelte']
-		}),
-		commonjs(),
+      legacy &&
+        babel({
+          extensions: ['.js', '.mjs', '.html', '.svelte'],
+          babelHelpers: 'runtime',
+          exclude: ['node_modules/@babel/**'],
+          presets: [
+            [
+              '@babel/preset-env',
+              {
+                targets: '> 0.25%, not dead',
+              },
+            ],
+          ],
+          plugins: [
+            '@babel/plugin-syntax-dynamic-import',
+            // SyntaxError importMeta inject_styles.js 3:35
+            // var href = new URL(file, import.meta.url);
+            '@babel/plugin-syntax-import-meta',
+            [
+              '@babel/plugin-transform-runtime',
+              {
+                useESModules: true,
+              },
+            ],
+          ],
+        }),
 
-		// In dev mode, call `npm run start` once
-		// the bundle has been generated
-		!production && serve(),
+      !dev &&
+        terser({
+          module: true,
+          compress: {
+            drop_console: true,
+          },
+        }),
+    ],
 
-		// Watch the `public` directory and refresh the
-		// browser on changes when not in production
-		!production && livereload('public'),
+    preserveEntrySignatures: false,
+    onwarn,
+  },
 
-		// If we're building for production (npm run build
-		// instead of npm run dev), minify
-		production && terser()
-	],
-	watch: {
-		clearScreen: false
-	}
+  server: {
+    input: config.server.input(),
+    output: config.server.output(),
+    plugins: [
+      replace({
+        // ...ga_id,
+        preventAssignment: true,
+        'process.browser': false,
+        'process.env.NODE_ENV': JSON.stringify(mode),
+      }),
+      svelte({
+        compilerOptions: {
+          dev,
+          generate: 'ssr',
+          hydratable: true,
+        },
+        emitCss: false,
+        preprocess,
+      }),
+      url({
+        sourceDir: path.resolve(__dirname, 'src/node_modules/images'),
+        publicPath: '/client/',
+        emitFiles: false, // already emitted by client build
+      }),
+      resolve({
+        dedupe: ['svelte'],
+      }),
+      commonjs(),
+    ],
+    external: Object.keys(pkg.dependencies).concat(require('module').builtinModules),
+    preserveEntrySignatures: 'strict',
+    onwarn,
+  },
+
+  serviceworker: {
+    input: config.serviceworker.input(),
+    output: config.serviceworker.output(),
+    plugins: [
+      resolve(),
+      replace({
+        preventAssignment: true,
+        values: {
+          'process.browser': true,
+          'process.env.NODE_ENV': JSON.stringify(mode),
+        }
+      }),
+      commonjs(),
+      !dev && terser(),
+    ],
+    preserveEntrySignatures: false,
+    onwarn,
+  },
 };
